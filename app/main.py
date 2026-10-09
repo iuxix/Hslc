@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 from app.config import settings
 from app.database import engine
-from app.routers import ai_test, auth
+from app.routers import ai_test, auth, setup
 from app import models  # noqa — register models
 
 app = FastAPI(
@@ -25,6 +25,7 @@ app.add_middleware(
 # Routers
 app.include_router(auth.router)
 app.include_router(ai_test.router)
+app.include_router(setup.router)
 
 
 @app.get("/")
