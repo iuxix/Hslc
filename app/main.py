@@ -5,7 +5,8 @@ from app.config import settings
 from app.database import engine
 from app.routers import ai_test, auth
 from app.routers.admin import curriculum as admin_curriculum
-from app import models  # noqa — register models
+from app.routers.admin import users as admin_users
+from app import models  # noqa
 
 app = FastAPI(
     title="SEBA HSLC Study Platform API",
@@ -23,12 +24,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Public routes
 app.include_router(auth.router)
 app.include_router(ai_test.router)
-
-# Admin routes
 app.include_router(admin_curriculum.router)
+app.include_router(admin_users.router)
 
 
 @app.get("/")
