@@ -17,7 +17,7 @@ def test_gemini():
     try:
         client = genai.Client(api_key=settings.GEMINI_API_KEY)
         response = client.models.generate_content(
-            model="gemini-2.5-flash",
+            model="gemini-3.5-flash-lite",
             contents="Say 'Hello from Gemini' in exactly 5 words."
         )
         return {
@@ -50,12 +50,11 @@ Return ONLY valid JSON in this exact format (no extra text, no markdown):
 }}"""
         
         response = client.models.generate_content(
-            model="gemini-2.5-flash",
+            model="gemini-3.5-flash-lite",
             contents=prompt
         )
         text = response.text.strip()
         
-        # Clean markdown if present
         if text.startswith("```"):
             text = text.split("```")[1]
             if text.startswith("json"):
@@ -74,4 +73,4 @@ Return ONLY valid JSON in this exact format (no extra text, no markdown):
             "status": "error",
             "error": str(e),
             "message": "Generation failed ❌"
-    }
+        }
