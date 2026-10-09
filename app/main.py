@@ -6,6 +6,7 @@ from app.database import engine
 from app.routers import ai_test, auth
 from app.routers.admin import curriculum as admin_curriculum
 from app.routers.admin import users as admin_users
+from app.routers.admin import questions as admin_questions
 from app import models  # noqa
 
 app = FastAPI(
@@ -24,10 +25,14 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Public
 app.include_router(auth.router)
 app.include_router(ai_test.router)
+
+# Admin
 app.include_router(admin_curriculum.router)
 app.include_router(admin_users.router)
+app.include_router(admin_questions.router)
 
 
 @app.get("/")
