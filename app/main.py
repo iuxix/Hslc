@@ -4,11 +4,10 @@ from sqlalchemy import text
 from app.config import settings
 from app.database import engine
 from app.routers import ai_test
-from app.routers import setup
-app.include_router(setup.router)
-from app import models  # noqa — register models with Base.metadata
+from app.routers import setup          # ← Ye line
+from app import models                 # noqa
 
-app = FastAPI(
+app = FastAPI(                         # ← app YAHAN banna chahiye (line 10)
     title="SEBA HSLC Study Platform API",
     description="Backend API for SEBA HSLC Class 10 exam training",
     version="0.1.0",
@@ -16,7 +15,7 @@ app = FastAPI(
     redoc_url="/redoc" if settings.DEBUG else None,
 )
 
-app.add_middleware(
+app.add_middleware(                    # ← middleware YAHAN
     CORSMiddleware,
     allow_origins=settings.cors_origins_list or ["*"],
     allow_credentials=True,
@@ -24,8 +23,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(ai_test.router)
-
+app.include_router(ai_test.router)     # ← routers YAHAN (line 20+)
+app.include_router(setup.router)       # ← ye bhi YAHAN
 
 @app.get("/")
 def read_root():
@@ -35,7 +34,6 @@ def read_root():
         "status": "running",
         "environment": settings.ENVIRONMENT,
     }
-
 
 @app.get("/health")
 def health_check():
