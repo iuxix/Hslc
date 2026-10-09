@@ -4,6 +4,7 @@ from sqlalchemy import text
 from app.config import settings
 from app.database import engine
 from app.routers import ai_test
+from app import models  # noqa — register models with Base.metadata
 
 app = FastAPI(
     title="SEBA HSLC Study Platform API",
@@ -21,7 +22,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Routers
 app.include_router(ai_test.router)
 
 
