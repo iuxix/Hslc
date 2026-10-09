@@ -3,8 +3,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 from app.config import settings
 from app.database import engine
-from app.routers import ai_test
-from app import models  # noqa — register models with Base.metadata
+from app.routers import ai_test, auth
+from app import models  # noqa — register models
 
 app = FastAPI(
     title="SEBA HSLC Study Platform API",
@@ -14,7 +14,6 @@ app = FastAPI(
     redoc_url="/redoc" if settings.DEBUG else None,
 )
 
-# CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins_list or ["*"],
@@ -24,6 +23,7 @@ app.add_middleware(
 )
 
 # Routers
+app.include_router(auth.router)
 app.include_router(ai_test.router)
 
 
