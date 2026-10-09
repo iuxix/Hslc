@@ -4,6 +4,8 @@ from sqlalchemy import text
 from app.config import settings
 from app.database import engine
 from app.routers import ai_test
+from app.routers import setup
+app.include_router(setup.router)
 from app import models  # noqa — register models with Base.metadata
 
 app = FastAPI(
