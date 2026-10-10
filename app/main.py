@@ -1,5 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response
 from sqlalchemy import text
 from app.config import settings
 from app.database import engine
@@ -42,15 +43,38 @@ app.include_router(admin_questions.router)
 
 @app.get("/")
 def read_root():
-    return {"app": "SEBA HSLC API", "version": "0.1.0", "status": "running", "environment": settings.ENVIRONMENT}
+    return {
+        "app": "SEBA HSLC API",
+        "version": "0.1.0",
+        "status": "running",
+        "environment": settings.ENVIRONMENT,
+    }
 
 
 @app.get("/health")
 def health_check():
+    """GET /health — full health check with DB status"""
     try:
         with engine.connect() as conn:
             conn.execute(text("SELECT 1"))
         db_status = "connected"
     except Exception as e:
         db_status = f"error: {str(e)}"
-    return {"status": "ok", "database": db_status, "environment": settings.ENVIRONMENT}
+
+    return {
+        "status": "ok",
+        "database": db_status,
+        "environment": settings.ENVIRONMENT,
+    }
+
+
+@app.head("/health")
+def health_check_head():
+    """HEAD /health — for uptime monitors (UptimeRobot)"""
+    return Response(status_code=200)
+
+
+@app.head("/")
+def root_head():
+    """HEAD / — for uptime monitors"""
+    return Response(status_code=200)
