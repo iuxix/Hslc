@@ -8,11 +8,7 @@ router = APIRouter(prefix="/api/setup", tags=["Setup"])
 
 @router.post("/create-tables")
 def create_tables(secret: str):
-    """
-    Temporary endpoint — creates all database tables.
-    Requires SECRET_KEY as query param.
-    DELETE THIS FILE AFTER USE.
-    """
+    """Temporary endpoint — creates all database tables."""
     if secret != settings.SECRET_KEY:
         raise HTTPException(status_code=403, detail="Invalid secret")
 
