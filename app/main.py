@@ -5,6 +5,7 @@ from sqlalchemy import text
 from app.config import settings
 from app.database import engine
 from app.routers import ai_test, auth, exam, student, public
+from app.routers import ai_generation
 from app.routers.admin import curriculum as admin_curriculum
 from app.routers.admin import users as admin_users
 from app.routers.admin import questions as admin_questions
@@ -39,6 +40,7 @@ app.include_router(student.router)
 app.include_router(admin_curriculum.router)
 app.include_router(admin_users.router)
 app.include_router(admin_questions.router)
+app.include_router(ai_generation.router)
 
 
 @app.get("/")
@@ -53,28 +55,20 @@ def read_root():
 
 @app.get("/health")
 def health_check():
-    """GET /health — full health check with DB status"""
     try:
         with engine.connect() as conn:
             conn.execute(text("SELECT 1"))
         db_status = "connected"
     except Exception as e:
         db_status = f"error: {str(e)}"
-
-    return {
-        "status": "ok",
-        "database": db_status,
-        "environment": settings.ENVIRONMENT,
-    }
+    return {"status": "ok", "database": db_status, "environment": settings.ENVIRONMENT}
 
 
 @app.head("/health")
 def health_check_head():
-    """HEAD /health — for uptime monitors (UptimeRobot)"""
     return Response(status_code=200)
 
 
 @app.head("/")
 def root_head():
-    """HEAD / — for uptime monitors"""
     return Response(status_code=200)
