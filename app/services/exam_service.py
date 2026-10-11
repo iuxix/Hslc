@@ -3,16 +3,13 @@ from fastapi import HTTPException
 from datetime import datetime, timedelta, timezone
 from typing import Optional, List
 import random
-import hashlib
 from app.models.test import Test, TestQuestion
 from app.models.attempt import Attempt, Answer, QuestionTiming
 from app.models.question import Question, QuestionOption
-from app.models.curriculum import Chapter
 from app.schemas.exam import ExamStartRequest
 
 
 def _shuffle(arr: list) -> list:
-    """Fisher-Yates shuffle"""
     a = arr[:]
     for i in range(len(a) - 1, 0, -1):
         j = random.randint(0, i)
@@ -35,8 +32,16 @@ def _select_questions(
         Question.is_active == True,
     )
 
+    # AI-only filter
+    if exam_type == "ai":
+        query = query.filter(Question.source == "ai")
+
     # Chapter filter
     if exam_type in ("chapter", "multi_chapter") and chapter_ids:
+        query = query.filter(Question.chapter_id.in_(chapter_ids))
+
+    # AI exam with specific chapters
+    if exam_type == "ai" and chapter_ids:
         query = query.filter(Question.chapter_id.in_(chapter_ids))
 
     # Difficulty filter
@@ -48,11 +53,9 @@ def _select_questions(
     if not all_matching:
         raise HTTPException(400, "No questions found for this configuration")
 
-    # If we have more questions than needed → random sample
     if len(all_matching) >= count:
         return random.sample(all_matching, count)
 
-    # If fewer → return all (with warning to user)
     return all_matching
 
 
@@ -73,7 +76,6 @@ def start_exam(db: Session, user_id: int, payload: ExamStartRequest) -> dict:
 
     total_q = len(questions)
 
-    # Create test
     now = datetime.now(timezone.utc)
     expires = now + timedelta(minutes=payload.duration_minutes)
 
@@ -94,15 +96,12 @@ def start_exam(db: Session, user_id: int, payload: ExamStartRequest) -> dict:
         expires_at=expires,
     )
     db.add(test)
-    db.flush()  # get test.id
+    db.flush()
 
-    # Shuffle questions
     shuffled_questions = _shuffle(questions)
 
-    # Create TestQuestion entries
     test_questions = []
     for idx, q in enumerate(shuffled_questions):
-        # Get options and shuffle their order
         options = db.query(QuestionOption).filter(
             QuestionOption.question_id == q.id
         ).all()
@@ -111,31 +110,25 @@ def start_exam(db: Session, user_id: int, payload: ExamStartRequest) -> dict:
             db.rollback()
             raise HTTPException(500, f"Question {q.id} has invalid options")
 
-        # Original labels: A, B, C, D
         original_labels = [opt.option_label for opt in options]
-        # Shuffle and re-map to A, B, C, D display
         shuffled_labels = _shuffle(original_labels)
 
         tq = TestQuestion(
             test_id=test.id,
             question_id=q.id,
             display_order=idx + 1,
-            option_order=shuffled_labels,  # ["C", "A", "D", "B"]
+            option_order=shuffled_labels,
         )
         db.add(tq)
         test_questions.append((tq, q, options))
 
     db.commit()
 
-    # Build response with shuffled options
     from app.schemas.exam import ExamQuestionView, ExamOptionView
 
     response_questions = []
     for tq, q, options in test_questions:
-        # Map original label → text
         opt_map = {opt.option_label: opt.option_text for opt in options}
-
-        # Shuffled display: A, B, C, D → original labels
         display_labels = ["A", "B", "C", "D"]
         shuffled_options = []
         for display_label, original_label in zip(display_labels, tq.option_order):
@@ -174,11 +167,8 @@ def save_answer(
     test_question_id: int,
     selected_option: Optional[str],
 ) -> dict:
-    """Save or update an answer"""
-
     test = _get_active_test(db, user_id, test_id)
 
-    # Get test question
     tq = db.query(TestQuestion).filter(
         TestQuestion.id == test_question_id,
         TestQuestion.test_id == test_id,
@@ -186,10 +176,8 @@ def save_answer(
     if not tq:
         raise HTTPException(404, "Question not part of this test")
 
-    # Find or create Answer row
     attempt = db.query(Attempt).filter(Attempt.test_id == test_id).first()
 
-    # Attempt not created yet — create it on first answer
     if not attempt:
         attempt = Attempt(
             test_id=test_id,
@@ -217,7 +205,6 @@ def save_answer(
         )
         db.add(answer)
     else:
-        # Answer changed
         if answer.selected_option != selected_option:
             answer.answer_change_count += 1
             answer.selected_option = selected_option
@@ -243,11 +230,8 @@ def record_timing(
     event: str,
     selected_during_visit: Optional[str] = None,
 ) -> dict:
-    """Record question open/close event"""
-
     _get_active_test(db, user_id, test_id)
 
-    # Ensure attempt exists
     attempt = db.query(Attempt).filter(Attempt.test_id == test_id).first()
     if not attempt:
         attempt = Attempt(
@@ -261,7 +245,6 @@ def record_timing(
     now = datetime.now(timezone.utc)
 
     if event == "open":
-        # Create new timing entry
         timing = QuestionTiming(
             attempt_id=attempt.id,
             test_question_id=test_question_id,
@@ -272,7 +255,6 @@ def record_timing(
         return {"test_question_id": test_question_id, "seconds_spent": 0}
 
     elif event == "close":
-        # Find latest open entry
         timing = db.query(QuestionTiming).filter(
             QuestionTiming.attempt_id == attempt.id,
             QuestionTiming.test_question_id == test_question_id,
@@ -287,7 +269,6 @@ def record_timing(
         timing.seconds_spent = int(delta)
         timing.selected_during_visit = selected_during_visit
 
-        # Update answer's final_time_spent
         answer = db.query(Answer).filter(
             Answer.test_question_id == test_question_id,
         ).first()
@@ -301,8 +282,6 @@ def record_timing(
 
 
 def submit_exam(db: Session, user_id: int, test_id: int, auto: bool = False) -> dict:
-    """Submit test — calculate score"""
-
     test = db.query(Test).filter(
         Test.id == test_id,
         Test.user_id == user_id,
@@ -315,7 +294,6 @@ def submit_exam(db: Session, user_id: int, test_id: int, auto: bool = False) -> 
 
     attempt = db.query(Attempt).filter(Attempt.test_id == test_id).first()
 
-    # If no attempt yet (student never answered anything)
     if not attempt:
         attempt = Attempt(
             test_id=test_id,
@@ -325,7 +303,6 @@ def submit_exam(db: Session, user_id: int, test_id: int, auto: bool = False) -> 
         db.add(attempt)
         db.flush()
 
-    # Score calculation
     test_questions = db.query(TestQuestion).filter(
         TestQuestion.test_id == test_id
     ).all()
@@ -335,10 +312,7 @@ def submit_exam(db: Session, user_id: int, test_id: int, auto: bool = False) -> 
     unanswered = 0
 
     for tq in test_questions:
-        # Get question and its correct option
         question = db.query(Question).filter(Question.id == tq.question_id).first()
-
-        # Find answer
         answer = db.query(Answer).filter(Answer.test_question_id == tq.id).first()
 
         if not answer or not answer.selected_option:
@@ -348,7 +322,6 @@ def submit_exam(db: Session, user_id: int, test_id: int, auto: bool = False) -> 
                 answer.status = "unanswered"
             continue
 
-        # Display label → original label mapping
         display_labels = ["A", "B", "C", "D"]
         try:
             display_index = display_labels.index(answer.selected_option)
@@ -356,7 +329,6 @@ def submit_exam(db: Session, user_id: int, test_id: int, auto: bool = False) -> 
         except (ValueError, IndexError):
             original_label = answer.selected_option
 
-        # Compare with correct_option (original)
         if original_label == question.correct_option:
             answer.is_correct = True
             answer.status = "answered"
@@ -366,7 +338,6 @@ def submit_exam(db: Session, user_id: int, test_id: int, auto: bool = False) -> 
             answer.status = "answered"
             wrong += 1
 
-    # Update attempt
     attempt.correct_count = correct
     attempt.wrong_count = wrong
     attempt.unanswered_count = unanswered
@@ -374,7 +345,6 @@ def submit_exam(db: Session, user_id: int, test_id: int, auto: bool = False) -> 
     attempt.total_marks = test.total_questions
     attempt.percentage = round((correct / test.total_questions) * 100, 2) if test.total_questions else 0
 
-    # Time
     now = datetime.now(timezone.utc)
     total_seconds = int((now - test.started_at).total_seconds())
     attempt.total_time_seconds = total_seconds
@@ -402,8 +372,6 @@ def submit_exam(db: Session, user_id: int, test_id: int, auto: bool = False) -> 
 
 
 def get_result(db: Session, user_id: int, test_id: int) -> dict:
-    """Full result with question-wise breakdown"""
-
     test = db.query(Test).filter(
         Test.id == test_id,
         Test.user_id == user_id,
@@ -425,7 +393,6 @@ def get_result(db: Session, user_id: int, test_id: int) -> dict:
         question = db.query(Question).filter(Question.id == tq.question_id).first()
         answer = db.query(Answer).filter(Answer.test_question_id == tq.id).first()
 
-        # Options (with display order)
         options_db = db.query(QuestionOption).filter(
             QuestionOption.question_id == question.id
         ).all()
@@ -440,7 +407,6 @@ def get_result(db: Session, user_id: int, test_id: int) -> dict:
                 "text": opt_map.get(original_label, ""),
             })
 
-        # Correct display label
         correct_display = None
         for i, orig in enumerate(tq.option_order):
             if orig == question.correct_option:
@@ -480,8 +446,6 @@ def get_result(db: Session, user_id: int, test_id: int) -> dict:
 
 
 def get_exam_state(db: Session, user_id: int, test_id: int) -> dict:
-    """Get current state — for resume"""
-
     test = db.query(Test).filter(
         Test.id == test_id,
         Test.user_id == user_id,
@@ -492,7 +456,6 @@ def get_exam_state(db: Session, user_id: int, test_id: int) -> dict:
     if test.status != "in_progress":
         raise HTTPException(400, f"Test is {test.status}, cannot resume")
 
-    # Remaining time
     now = datetime.now(timezone.utc)
     remaining = int((test.expires_at - now).total_seconds())
     if remaining < 0:
@@ -517,7 +480,6 @@ def get_exam_state(db: Session, user_id: int, test_id: int) -> dict:
 
 
 def _get_active_test(db: Session, user_id: int, test_id: int) -> Test:
-    """Get test and verify it's active and not expired"""
     test = db.query(Test).filter(
         Test.id == test_id,
         Test.user_id == user_id,
@@ -528,10 +490,8 @@ def _get_active_test(db: Session, user_id: int, test_id: int) -> Test:
     if test.status != "in_progress":
         raise HTTPException(400, f"Test is {test.status}")
 
-    # Check expiry
     now = datetime.now(timezone.utc)
     if test.expires_at < now:
-        # Auto-expire
         test.status = "expired"
         db.commit()
         raise HTTPException(400, "Test has expired")
