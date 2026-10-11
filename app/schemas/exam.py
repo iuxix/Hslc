@@ -8,9 +8,9 @@ from typing import Optional, List, Literal
 # ============================================================
 
 class ExamStartRequest(BaseModel):
-    exam_type: Literal["full", "chapter", "multi_chapter", "subject", "practice", "mistake"]
+    exam_type: Literal["full", "chapter", "multi_chapter", "subject", "practice", "mistake", "ai"]
     subject_id: int
-    chapter_ids: Optional[List[int]] = None  # for chapter/multi_chapter
+    chapter_ids: Optional[List[int]] = None
     difficulty: Literal["mixed", "easy", "hard"] = "mixed"
     count: int = Field(45, ge=1, le=100)
     duration_minutes: int = Field(60, ge=1, le=180)
@@ -27,7 +27,6 @@ class ExamStartResponse(BaseModel):
 
 
 class ExamQuestionView(BaseModel):
-    """Question as seen during exam — no correct answer revealed"""
     test_question_id: int
     question_id: int
     display_order: int
@@ -39,9 +38,9 @@ class ExamQuestionView(BaseModel):
 
 
 class ExamOptionView(BaseModel):
-    option_label: str  # shuffled label (A/B/C/D as displayed)
+    option_label: str
     option_text: str
-    original_label: str  # original label for internal tracking
+    original_label: str
 
 
 # ============================================================
@@ -50,13 +49,13 @@ class ExamOptionView(BaseModel):
 
 class AnswerSaveRequest(BaseModel):
     test_question_id: int
-    selected_option: Optional[str] = None  # A/B/C/D or None to clear
+    selected_option: Optional[str] = None
 
 
 class AnswerSaveResponse(BaseModel):
     test_question_id: int
     selected_option: Optional[str] = None
-    status: str  # answered / unanswered / skipped
+    status: str
     answer_change_count: int
 
 
@@ -128,7 +127,7 @@ class ExamResultResponse(BaseModel):
 
 
 # ============================================================
-# CURRENT STATE (for resume)
+# CURRENT STATE
 # ============================================================
 
 class ExamStateResponse(BaseModel):
@@ -136,8 +135,8 @@ class ExamStateResponse(BaseModel):
     status: str
     remaining_seconds: int
     current_question_index: int
-    answers: dict  # {test_question_id: selected_option}
-    marked: List[int]  # test_question_ids marked
+    answers: dict
+    marked: List[int]
 
 
 ExamStartResponse.model_rebuild()
