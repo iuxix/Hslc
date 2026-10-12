@@ -82,6 +82,16 @@ def activate(
     return svc.activate_user(db, user_id)
 
 
+@router.post("/{user_id}/reset-data", response_model=dict)
+def reset_data(
+    user_id: int,
+    db: Session = Depends(get_db),
+    current_admin: User = Depends(get_current_admin),
+):
+    """Delete all test attempts and progress for a user (keeps account)"""
+    return svc.reset_user_data(db, user_id, current_admin)
+
+
 @router.delete("/{user_id}", response_model=MessageResponse)
 def delete_user(
     user_id: int,
