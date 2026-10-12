@@ -2,6 +2,8 @@ from sqlalchemy.orm import Session
 from fastapi import HTTPException
 from typing import List
 from app.models.user import User
+from app.models.test import Test
+from app.models.attempt import Attempt, Answer, QuestionTiming
 
 
 def get_all_users(db: Session, include_inactive: bool = False) -> List[User]:
@@ -48,3 +50,64 @@ def activate_user(db: Session, user_id: int) -> User:
     db.commit()
     db.refresh(user)
     return user
+
+
+# ============================================================
+# RESET USER DATA
+# ============================================================
+
+def reset_user_data(db: Session, user_id: int, current_admin: User) -> dict:
+    """
+    Delete all test attempts, answers, and timing records for a user.
+    User account stays — only progress resets.
+    """
+    user = get_user_by_id(db, user_id)
+
+    # Safety: don't reset yourself
+    if user.id == current_admin.id:
+        raise HTTPException(400, "Cannot reset your own data")
+
+    # Get all attempts for the user
+    attempts = db.query(Attempt).filter(Attempt.user_id == user_id).all()
+    attempt_ids = [a.id for a in attempts]
+
+    # Count before delete
+    total_attempts = len(attempt_ids)
+    total_answers = 0
+    total_timings = 0
+
+    if attempt_ids:
+        total_answers = db.query(Answer).filter(Answer.attempt_id.in_(attempt_ids)).count()
+        total_timings = db.query(QuestionTiming).filter(QuestionTiming.attempt_id.in_(attempt_ids)).count()
+
+    # Delete attempts (cascade should delete answers + timings)
+    if attempt_ids:
+        # Explicit delete for safety
+        db.query(QuestionTiming).filter(QuestionTiming.attempt_id.in_(attempt_ids)).delete(synchronize_session=False)
+        db.query(Answer).filter(Answer.attempt_id.in_(attempt_ids)).delete(synchronize_session=False)
+        db.query(Attempt).filter(Attempt.id.in_(attempt_ids)).delete(synchronize_session=False)
+
+    # Get all tests for the user (in_progress, submitted, expired)
+    tests = db.query(Test).filter(Test.user_id == user_id).all()
+    total_tests = len(tests)
+
+    if tests:
+        # Delete test_questions first (cascade)
+        from app.models.test import TestQuestion
+        test_ids = [t.id for t in tests]
+        db.query(TestQuestion).filter(TestQuestion.test_id.in_(test_ids)).delete(synchronize_session=False)
+        db.query(Test).filter(Test.id.in_(test_ids)).delete(synchronize_session=False)
+
+    db.commit()
+
+    return {
+        "message": f"Reset complete for user {user.username}",
+        "user_id": user_id,
+        "username": user.username,
+        "deleted": {
+            "tests": total_tests,
+            "attempts": total_attempts,
+            "answers": total_answers,
+            "timings": total_timings,
+        },
+    }
