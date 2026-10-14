@@ -5,7 +5,6 @@ from sqlalchemy import text
 from app.config import settings
 from app.database import engine
 from app.routers import ai_test, auth, exam, student, public
-from app.routers import ai_generation
 from app.routers.admin import curriculum as admin_curriculum
 from app.routers.admin import users as admin_users
 from app.routers.admin import questions as admin_questions
@@ -27,20 +26,23 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Public
+# Routers
 app.include_router(auth.router)
 app.include_router(ai_test.router)
 app.include_router(public.router)
-
-# Student
 app.include_router(exam.router)
 app.include_router(student.router)
-
-# Admin
 app.include_router(admin_curriculum.router)
 app.include_router(admin_users.router)
 app.include_router(admin_questions.router)
-app.include_router(ai_generation.router)
+
+
+# ========== LIGHTWEIGHT ENDPOINTS ==========
+
+@app.get("/api/ping")
+def ping():
+    """Fastest possible ping — UptimeRobot use kare"""
+    return {"pong": True}
 
 
 @app.get("/")
@@ -55,20 +57,34 @@ def read_root():
 
 @app.get("/health")
 def health_check():
+    """Lightweight health check — no DB call"""
+    return {
+        "status": "ok",
+        "environment": settings.ENVIRONMENT,
+    }
+
+
+@app.get("/health/full")
+def health_check_full():
+    """Full health — with DB (jab chahiye)"""
     try:
         with engine.connect() as conn:
             conn.execute(text("SELECT 1"))
         db_status = "connected"
     except Exception as e:
         db_status = f"error: {str(e)}"
-    return {"status": "ok", "database": db_status, "environment": settings.ENVIRONMENT}
+    return {
+        "status": "ok",
+        "database": db_status,
+        "environment": settings.ENVIRONMENT,
+    }
 
 
 @app.head("/health")
-def health_check_head():
+def health_head():
     return Response(status_code=200)
 
 
-@app.head("/")
-def root_head():
+@app.head("/api/ping")
+def ping_head():
     return Response(status_code=200)
