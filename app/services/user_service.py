@@ -2,8 +2,9 @@ from sqlalchemy.orm import Session
 from fastapi import HTTPException
 from typing import List
 from app.models.user import User
-from app.models.test import Test
+from app.models.test import Test, TestQuestion
 from app.models.attempt import Attempt, Answer, QuestionTiming
+from app.services.analytics_service import clear_user_cache
 
 
 def get_all_users(db: Session, include_inactive: bool = False) -> List[User]:
@@ -23,12 +24,9 @@ def get_user_by_id(db: Session, user_id: int) -> User:
 def delete_user(db: Session, user_id: int, current_admin: User) -> None:
     if user_id == current_admin.id:
         raise HTTPException(400, "Cannot delete your own account")
-
     user = get_user_by_id(db, user_id)
-
     if user.role == "admin":
         raise HTTPException(400, "Cannot delete another admin")
-
     db.delete(user)
     db.commit()
 
@@ -36,7 +34,6 @@ def delete_user(db: Session, user_id: int, current_admin: User) -> None:
 def deactivate_user(db: Session, user_id: int, current_admin: User) -> User:
     if user_id == current_admin.id:
         raise HTTPException(400, "Cannot deactivate your own account")
-
     user = get_user_by_id(db, user_id)
     user.is_active = False
     db.commit()
@@ -52,26 +49,15 @@ def activate_user(db: Session, user_id: int) -> User:
     return user
 
 
-# ============================================================
-# RESET USER DATA
-# ============================================================
-
 def reset_user_data(db: Session, user_id: int, current_admin: User) -> dict:
-    """
-    Delete all test attempts, answers, and timing records for a user.
-    User account stays — only progress resets.
-    """
     user = get_user_by_id(db, user_id)
 
-    # Safety: don't reset yourself
     if user.id == current_admin.id:
         raise HTTPException(400, "Cannot reset your own data")
 
-    # Get all attempts for the user
     attempts = db.query(Attempt).filter(Attempt.user_id == user_id).all()
     attempt_ids = [a.id for a in attempts]
 
-    # Count before delete
     total_attempts = len(attempt_ids)
     total_answers = 0
     total_timings = 0
@@ -80,25 +66,23 @@ def reset_user_data(db: Session, user_id: int, current_admin: User) -> dict:
         total_answers = db.query(Answer).filter(Answer.attempt_id.in_(attempt_ids)).count()
         total_timings = db.query(QuestionTiming).filter(QuestionTiming.attempt_id.in_(attempt_ids)).count()
 
-    # Delete attempts (cascade should delete answers + timings)
     if attempt_ids:
-        # Explicit delete for safety
         db.query(QuestionTiming).filter(QuestionTiming.attempt_id.in_(attempt_ids)).delete(synchronize_session=False)
         db.query(Answer).filter(Answer.attempt_id.in_(attempt_ids)).delete(synchronize_session=False)
         db.query(Attempt).filter(Attempt.id.in_(attempt_ids)).delete(synchronize_session=False)
 
-    # Get all tests for the user (in_progress, submitted, expired)
     tests = db.query(Test).filter(Test.user_id == user_id).all()
     total_tests = len(tests)
 
     if tests:
-        # Delete test_questions first (cascade)
-        from app.models.test import TestQuestion
         test_ids = [t.id for t in tests]
         db.query(TestQuestion).filter(TestQuestion.test_id.in_(test_ids)).delete(synchronize_session=False)
         db.query(Test).filter(Test.id.in_(test_ids)).delete(synchronize_session=False)
 
     db.commit()
+
+    # ✅ Clear cache after reset
+    clear_user_cache(user_id)
 
     return {
         "message": f"Reset complete for user {user.username}",
