@@ -33,7 +33,7 @@ class ExamQuestionView(BaseModel):
     question_text: str
     difficulty: str
     chapter_id: int
-    topic_id: Optional[int] = None
+    topic_id: Optional[int] = None  # ← keep for backward compat
     options: List["ExamOptionView"]
 
 
