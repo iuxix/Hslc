@@ -31,6 +31,7 @@ class HistoryResponse(BaseModel):
     best_percentage: float
     average_time_per_question: float
     attempts: List[AttemptSummary]
+    has_more: bool = False   # ← NEW
 
 
 # ============================================================
