@@ -7,6 +7,7 @@ from app.models.test import Test, TestQuestion
 from app.models.attempt import Attempt, Answer, QuestionTiming
 from app.models.question import Question, QuestionOption
 from app.schemas.exam import ExamStartRequest
+from app.services.analytics_service import clear_user_cache
 
 
 def _shuffle(arr: list) -> list:
@@ -25,26 +26,20 @@ def _select_questions(
     difficulty: str,
     count: int,
 ) -> List[Question]:
-    """Select questions based on config"""
-
     query = db.query(Question).filter(
         Question.subject_id == subject_id,
         Question.is_active == True,
     )
 
-    # AI-only filter
     if exam_type == "ai":
         query = query.filter(Question.source == "ai")
 
-    # Chapter filter
     if exam_type in ("chapter", "multi_chapter") and chapter_ids:
         query = query.filter(Question.chapter_id.in_(chapter_ids))
 
-    # AI exam with specific chapters
     if exam_type == "ai" and chapter_ids:
         query = query.filter(Question.chapter_id.in_(chapter_ids))
 
-    # Difficulty filter
     if difficulty != "mixed":
         query = query.filter(Question.difficulty == difficulty)
 
@@ -60,8 +55,6 @@ def _select_questions(
 
 
 def start_exam(db: Session, user_id: int, payload: ExamStartRequest) -> dict:
-    """Create a new test, pick questions, randomize order"""
-
     questions = _select_questions(
         db=db,
         exam_type=payload.exam_type,
@@ -75,7 +68,6 @@ def start_exam(db: Session, user_id: int, payload: ExamStartRequest) -> dict:
         raise HTTPException(400, "No questions available")
 
     total_q = len(questions)
-
     now = datetime.now(timezone.utc)
     expires = now + timedelta(minutes=payload.duration_minutes)
 
@@ -99,8 +91,8 @@ def start_exam(db: Session, user_id: int, payload: ExamStartRequest) -> dict:
     db.flush()
 
     shuffled_questions = _shuffle(questions)
-
     test_questions = []
+
     for idx, q in enumerate(shuffled_questions):
         options = db.query(QuestionOption).filter(
             QuestionOption.question_id == q.id
@@ -145,7 +137,7 @@ def start_exam(db: Session, user_id: int, payload: ExamStartRequest) -> dict:
             question_text=q.question_text,
             difficulty=q.difficulty,
             chapter_id=q.chapter_id,
-            topic_id=q.topic_id,
+            topic_id=None,  # ← topics removed
             options=shuffled_options,
         ))
 
@@ -357,6 +349,9 @@ def submit_exam(db: Session, user_id: int, test_id: int, auto: bool = False) -> 
     db.commit()
     db.refresh(attempt)
 
+    # ✅ Cache clear — fresh dashboard next time
+    clear_user_cache(user_id)
+
     return {
         "attempt_id": attempt.id,
         "test_id": test_id,
@@ -383,19 +378,37 @@ def get_result(db: Session, user_id: int, test_id: int) -> dict:
     if not attempt:
         raise HTTPException(404, "No attempt found")
 
-    test_questions = db.query(TestQuestion).filter(
-        TestQuestion.test_id == test_id
-    ).order_by(TestQuestion.display_order).all()
+    # ✅ Single query — all test questions with eager loaded question
+    from sqlalchemy.orm import joinedload
+    test_questions = (
+        db.query(TestQuestion)
+        .options(joinedload(TestQuestion.question))
+        .filter(TestQuestion.test_id == test_id)
+        .order_by(TestQuestion.display_order)
+        .all()
+    )
+
+    # ✅ Single query — all answers
+    answers_map = {}
+    for ans in db.query(Answer).filter(Answer.attempt_id == attempt.id).all():
+        answers_map[ans.test_question_id] = ans
+
+    # ✅ Single query — all options
+    question_ids = [tq.question_id for tq in test_questions]
+    all_options = db.query(QuestionOption).filter(
+        QuestionOption.question_id.in_(question_ids)
+    ).all()
+    options_map = {}
+    for opt in all_options:
+        options_map.setdefault(opt.question_id, []).append(opt)
 
     question_results = []
 
     for tq in test_questions:
-        question = db.query(Question).filter(Question.id == tq.question_id).first()
-        answer = db.query(Answer).filter(Answer.test_question_id == tq.id).first()
+        question = tq.question
+        answer = answers_map.get(tq.id)
+        options_db = options_map.get(question.id, [])
 
-        options_db = db.query(QuestionOption).filter(
-            QuestionOption.question_id == question.id
-        ).all()
         opt_map = {opt.option_label: opt.option_text for opt in options_db}
         display_labels = ["A", "B", "C", "D"]
 
@@ -419,7 +432,7 @@ def get_result(db: Session, user_id: int, test_id: int) -> dict:
             "question_text": question.question_text,
             "difficulty": question.difficulty,
             "chapter_id": question.chapter_id,
-            "topic_id": question.topic_id,
+            "topic_id": None,  # topics removed
             "selected_option": answer.selected_option if answer else None,
             "correct_option": correct_display or question.correct_option,
             "is_correct": answer.is_correct if answer else False,
