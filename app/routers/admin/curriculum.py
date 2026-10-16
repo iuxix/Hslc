@@ -4,7 +4,7 @@ from typing import List
 
 from app.database import get_db
 from app.dependencies import get_current_admin
-from app.models.user import User
+from app.models.curriculum import Subject, Section, Chapter, Topic
 from app.schemas.curriculum import (
     SubjectCreate,
     SubjectUpdate,
@@ -31,6 +31,116 @@ router = APIRouter(
     tags=["Admin — Curriculum"],
     dependencies=[Depends(get_current_admin)],
 )
+
+
+# ============================================================
+# LIGHTWEIGHT ENDPOINTS (for admin panel speed)
+# ============================================================
+
+@router.get("/curriculum-light")
+def get_curriculum_light(db: Session = Depends(get_db)):
+    """
+    Full curriculum tree in ONE call — subjects + sections + chapters (no topics).
+    Much faster than multiple calls.
+    """
+    subjects = db.query(Subject).filter(
+        Subject.is_active == True
+    ).order_by(Subject.display_order).all()
+
+    result = []
+    for subj in subjects:
+        sections = db.query(Section).filter(
+            Section.subject_id == subj.id,
+            Section.is_active == True,
+        ).order_by(Section.display_order).all()
+
+        sections_data = []
+        for sec in sections:
+            chapters = db.query(Chapter).filter(
+                Chapter.section_id == sec.id,
+                Chapter.is_active == True,
+            ).order_by(Chapter.display_order).all()
+
+            sections_data.append({
+                "id": sec.id,
+                "name": sec.name,
+                "chapters": [
+                    {"id": c.id, "name": c.name}
+                    for c in chapters
+                ],
+            })
+
+        result.append({
+            "id": subj.id,
+            "name": subj.name,
+            "code": subj.code,
+            "exam_pattern": subj.exam_pattern,
+            "sections": sections_data,
+        })
+
+    return result
+
+
+@router.get("/questions-count")
+def get_questions_count(db: Session = Depends(get_db)):
+    """
+    Admin stats — questions count per subject and per chapter.
+    """
+    from app.models.question import Question
+    from sqlalchemy import func
+
+    # Total by subject
+    subject_counts = db.query(
+        Question.subject_id,
+        func.count(Question.id).label("count"),
+    ).filter(Question.is_active == True).group_by(Question.subject_id).all()
+
+    # Total by chapter
+    chapter_counts = db.query(
+        Question.chapter_id,
+        func.count(Question.id).label("count"),
+    ).filter(Question.is_active == True).group_by(Question.chapter_id).all()
+
+    # Build subject-wise response
+    subjects = db.query(Subject).order_by(Subject.display_order).all()
+
+    subject_stats = []
+    for subj in subjects:
+        # Subject total
+        subj_count = next(
+            (int(c.count) for c in subject_counts if c.subject_id == subj.id),
+            0,
+        )
+
+        # Chapter-wise within this subject
+        chapters_data = []
+        sections = db.query(Section).filter(Section.subject_id == subj.id).all()
+        for sec in sections:
+            chapters = db.query(Chapter).filter(Chapter.section_id == sec.id).all()
+            for ch in chapters:
+                ch_count = next(
+                    (int(c.count) for c in chapter_counts if c.chapter_id == ch.id),
+                    0,
+                )
+                chapters_data.append({
+                    "chapter_id": ch.id,
+                    "chapter_name": ch.name,
+                    "section_name": sec.name,
+                    "count": ch_count,
+                })
+
+        subject_stats.append({
+            "subject_id": subj.id,
+            "subject_name": subj.name,
+            "subject_code": subj.code,
+            "total_questions": subj_count,
+            "chapters": chapters_data,
+        })
+
+    return {
+        "total_questions": sum(int(c.count) for c in subject_counts),
+        "subjects": subject_stats,
+    }
 
 
 # ============================================================
