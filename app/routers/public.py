@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
+from sqlalchemy import text
 from typing import List
 
 from app.database import get_db
@@ -13,6 +14,28 @@ from app.schemas.curriculum import (
 
 router = APIRouter(prefix="/api/public", tags=["Public Curriculum"])
 
+
+# ============================================================
+# ✅ WARMUP — UptimeRobot ke liye (Neon ko warm rakhta hai)
+# ============================================================
+
+@router.get("/warmup", tags=["Health"])
+def warmup(db: Session = Depends(get_db)):
+    """
+    Warm-up endpoint for UptimeRobot.
+    Touches DB so Neon doesn't auto-suspend (5 min idle).
+    """
+    count = db.execute(text("SELECT COUNT(*) FROM questions")).scalar()
+    return {
+        "warm": True,
+        "question_count": count,
+        "status": "ok",
+    }
+
+
+# ============================================================
+# SUBJECTS
+# ============================================================
 
 @router.get("/subjects", response_model=List[SubjectResponse])
 def list_subjects(db: Session = Depends(get_db)):
@@ -32,7 +55,7 @@ def list_sections(subject_id: int, db: Session = Depends(get_db)):
     return db.query(Section).filter(Section.subject_id == subject_id, Section.is_active == True).order_by(Section.display_order).all()
 
 
-# ✅ NEW: Lightweight — only sections + chapters (no topics)
+# ✅ Lightweight — only sections + chapters (no topics)
 @router.get("/subjects/{subject_id}/chapters-only")
 def get_subject_chapters_only(subject_id: int, db: Session = Depends(get_db)):
     """Fast version — sections + chapters only, NO topics"""
