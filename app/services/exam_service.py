@@ -1,4 +1,5 @@
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
+from sqlalchemy import func
 from fastapi import HTTPException
 from datetime import datetime, timedelta, timezone
 from typing import Optional, List
@@ -26,9 +27,18 @@ def _select_questions(
     difficulty: str,
     count: int,
 ) -> List[Question]:
-    query = db.query(Question).filter(
-        Question.subject_id == subject_id,
-        Question.is_active == True,
+    """
+    ✅ OPTIMIZED:
+    - selectinload(Question.options)  → N+1 options query fix (1 query instead of N)
+    - func.random().limit(count)      → SQL-level random, no full table scan
+    """
+    query = (
+        db.query(Question)
+        .options(selectinload(Question.options))   # ✅ eager load options
+        .filter(
+            Question.subject_id == subject_id,
+            Question.is_active == True,
+        )
     )
 
     if exam_type == "ai":
@@ -43,15 +53,13 @@ def _select_questions(
     if difficulty != "mixed":
         query = query.filter(Question.difficulty == difficulty)
 
-    all_matching = query.all()
+    # ✅ SQL-level random + limit — memory mein saare questions load NAHI honge
+    questions = query.order_by(func.random()).limit(count).all()
 
-    if not all_matching:
+    if not questions:
         raise HTTPException(400, "No questions found for this configuration")
 
-    if len(all_matching) >= count:
-        return random.sample(all_matching, count)
-
-    return all_matching
+    return questions
 
 
 def start_exam(db: Session, user_id: int, payload: ExamStartRequest) -> dict:
@@ -94,9 +102,8 @@ def start_exam(db: Session, user_id: int, payload: ExamStartRequest) -> dict:
     test_questions = []
 
     for idx, q in enumerate(shuffled_questions):
-        options = db.query(QuestionOption).filter(
-            QuestionOption.question_id == q.id
-        ).all()
+        # ✅ q.options already loaded via selectinload — no extra query
+        options = q.options
 
         if len(options) != 4:
             db.rollback()
@@ -137,7 +144,7 @@ def start_exam(db: Session, user_id: int, payload: ExamStartRequest) -> dict:
             question_text=q.question_text,
             difficulty=q.difficulty,
             chapter_id=q.chapter_id,
-            topic_id=None,  # ← topics removed
+            topic_id=None,
             options=shuffled_options,
         ))
 
@@ -349,7 +356,6 @@ def submit_exam(db: Session, user_id: int, test_id: int, auto: bool = False) -> 
     db.commit()
     db.refresh(attempt)
 
-    # ✅ Cache clear — fresh dashboard next time
     clear_user_cache(user_id)
 
     return {
@@ -378,7 +384,6 @@ def get_result(db: Session, user_id: int, test_id: int) -> dict:
     if not attempt:
         raise HTTPException(404, "No attempt found")
 
-    # ✅ Single query — all test questions with eager loaded question
     from sqlalchemy.orm import joinedload
     test_questions = (
         db.query(TestQuestion)
@@ -388,12 +393,10 @@ def get_result(db: Session, user_id: int, test_id: int) -> dict:
         .all()
     )
 
-    # ✅ Single query — all answers
     answers_map = {}
     for ans in db.query(Answer).filter(Answer.attempt_id == attempt.id).all():
         answers_map[ans.test_question_id] = ans
 
-    # ✅ Single query — all options
     question_ids = [tq.question_id for tq in test_questions]
     all_options = db.query(QuestionOption).filter(
         QuestionOption.question_id.in_(question_ids)
@@ -432,7 +435,7 @@ def get_result(db: Session, user_id: int, test_id: int) -> dict:
             "question_text": question.question_text,
             "difficulty": question.difficulty,
             "chapter_id": question.chapter_id,
-            "topic_id": None,  # topics removed
+            "topic_id": None,
             "selected_option": answer.selected_option if answer else None,
             "correct_option": correct_display or question.correct_option,
             "is_correct": answer.is_correct if answer else False,
