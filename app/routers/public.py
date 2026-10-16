@@ -19,11 +19,12 @@ router = APIRouter(prefix="/api/public", tags=["Public Curriculum"])
 # ✅ WARMUP — UptimeRobot ke liye (Neon ko warm rakhta hai)
 # ============================================================
 
-@router.get("/warmup", tags=["Health"])
+@router.api_route("/warmup", methods=["GET", "HEAD"], tags=["Health"])
 def warmup(db: Session = Depends(get_db)):
     """
     Warm-up endpoint for UptimeRobot.
     Touches DB so Neon doesn't auto-suspend (5 min idle).
+    Supports GET and HEAD (UptimeRobot uses HEAD).
     """
     count = db.execute(text("SELECT COUNT(*) FROM questions")).scalar()
     return {
