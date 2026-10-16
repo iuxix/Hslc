@@ -1,5 +1,5 @@
-from sqlalchemy.orm import Session, selectinload
-from sqlalchemy import func
+from sqlalchemy.orm import Session, selectinload, joinedload
+from sqlalchemy import func, insert
 from fastapi import HTTPException
 from datetime import datetime, timedelta, timezone
 from typing import Optional, List
@@ -29,12 +29,12 @@ def _select_questions(
 ) -> List[Question]:
     """
     ✅ OPTIMIZED:
-    - selectinload(Question.options)  → N+1 options query fix
-    - func.random().limit(count)      → SQL-level random, no full table scan
+    - joinedload(Question.options)  → 1 query (JOIN), not 2
+    - func.random().limit(count)    → SQL-level random
     """
     query = (
         db.query(Question)
-        .options(selectinload(Question.options))   # ✅ eager load options
+        .options(joinedload(Question.options))   # ✅ 1 query with JOIN
         .filter(
             Question.subject_id == subject_id,
             Question.is_active == True,
@@ -53,7 +53,6 @@ def _select_questions(
     if difficulty != "mixed":
         query = query.filter(Question.difficulty == difficulty)
 
-    # ✅ SQL-level random + limit
     questions = query.order_by(func.random()).limit(count).all()
 
     if not questions:
@@ -96,13 +95,15 @@ def start_exam(db: Session, user_id: int, payload: ExamStartRequest) -> dict:
         expires_at=expires,
     )
     db.add(test)
-    db.flush()
+    db.flush()   # Test ID milega
 
     shuffled_questions = _shuffle(questions)
-    test_questions = []
+
+    # ✅ BULK INSERT — 10 INSERTs → 1 INSERT
+    tq_rows = []
+    question_order_map = []   # (q, options, shuffled_labels) — response ke liye
 
     for idx, q in enumerate(shuffled_questions):
-        # ✅ q.options already loaded via selectinload — no extra query
         options = q.options
 
         if len(options) != 4:
@@ -112,21 +113,32 @@ def start_exam(db: Session, user_id: int, payload: ExamStartRequest) -> dict:
         original_labels = [opt.option_label for opt in options]
         shuffled_labels = _shuffle(original_labels)
 
-        tq = TestQuestion(
-            test_id=test.id,
-            question_id=q.id,
-            display_order=idx + 1,
-            option_order=shuffled_labels,
-        )
-        db.add(tq)
-        test_questions.append((tq, q, options))
+        tq_rows.append({
+            "test_id": test.id,
+            "question_id": q.id,
+            "display_order": idx + 1,
+            "option_order": shuffled_labels,
+        })
+        question_order_map.append((q, options, shuffled_labels))
+
+    # Bulk insert — single round trip
+    if tq_rows:
+        db.execute(insert(TestQuestion), tq_rows)
 
     db.commit()
+
+    # Ab test_questions ki IDs chahiye — dobara query karo (ek query)
+    test_qs = (
+        db.query(TestQuestion)
+        .filter(TestQuestion.test_id == test.id)
+        .order_by(TestQuestion.display_order)
+        .all()
+    )
 
     from app.schemas.exam import ExamQuestionView, ExamOptionView
 
     response_questions = []
-    for tq, q, options in test_questions:
+    for tq, (q, options, shuffled_labels) in zip(test_qs, question_order_map):
         opt_map = {opt.option_label: opt.option_text for opt in options}
         display_labels = ["A", "B", "C", "D"]
         shuffled_options = []
