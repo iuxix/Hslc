@@ -29,7 +29,7 @@ def _select_questions(
 ) -> List[Question]:
     """
     ✅ OPTIMIZED:
-    - selectinload(Question.options)  → N+1 options query fix (1 query instead of N)
+    - selectinload(Question.options)  → N+1 options query fix
     - func.random().limit(count)      → SQL-level random, no full table scan
     """
     query = (
@@ -53,7 +53,7 @@ def _select_questions(
     if difficulty != "mixed":
         query = query.filter(Question.difficulty == difficulty)
 
-    # ✅ SQL-level random + limit — memory mein saare questions load NAHI honge
+    # ✅ SQL-level random + limit
     questions = query.order_by(func.random()).limit(count).all()
 
     if not questions:
