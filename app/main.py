@@ -9,7 +9,7 @@ from app.routers.admin import curriculum as admin_curriculum
 from app.routers.admin import users as admin_users
 from app.routers.admin import questions as admin_questions
 from app import models  # noqa
-
+from app.routers.admin import migration as admin_migration
 app = FastAPI(
     title="SEBA HSLC Study Platform API",
     description="Backend API for SEBA HSLC Class 10 exam training",
@@ -35,6 +35,7 @@ app.include_router(student.router)
 app.include_router(admin_curriculum.router)
 app.include_router(admin_users.router)
 app.include_router(admin_questions.router)
+app.include_router(admin_migration.router)
 
 
 # ========== LIGHTWEIGHT ENDPOINTS ==========
