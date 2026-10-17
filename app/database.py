@@ -2,7 +2,6 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, declarative_base
 from app.config import settings
 
-# ✅ psycopg2 + Neon pooler compatible
 engine = create_engine(
     settings.DATABASE_URL,
     pool_pre_ping=True,
@@ -17,12 +16,17 @@ engine = create_engine(
         "keepalives_idle": 30,
         "keepalives_interval": 10,
         "keepalives_count": 5,
-        # ⚠️ psycopg2 ke saath prepare_threshold kaam nahi karta
-        # Isliye ise HATA do
     },
 )
 
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+# ✅ NAYA: expire_on_commit=False
+SessionLocal = sessionmaker(
+    autocommit=False,
+    autoflush=False,
+    bind=engine,
+    expire_on_commit=False,   # ← YE ADD KARO
+)
+
 Base = declarative_base()
 
 
