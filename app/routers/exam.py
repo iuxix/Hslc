@@ -121,3 +121,18 @@ def get_result(
 ):
     """Get full result with question-wise breakdown"""
     return svc.get_result(db, current_user.id, test_id)
+
+
+
+# ============================================================
+# ABANDON TEST (Exit without saving)
+# ============================================================
+
+@router.post("/{test_id}/abandon")
+def abandon_test(
+    test_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Abandon in-progress test — delete all answers, timing, test_questions"""
+    return svc.abandon_test(db, current_user.id, test_id)
