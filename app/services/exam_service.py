@@ -542,3 +542,47 @@ def _get_active_test(db: Session, user_id: int, test_id: int) -> Test:
         raise HTTPException(400, "Test has expired")
 
     return test
+
+
+
+# ============================================================
+# ABANDON TEST (Exit without saving)
+# ============================================================
+
+def abandon_test(db: Session, user_id: int, test_id: int) -> dict:
+    """
+    Abandon an in-progress test.
+    - Delete all answers, timing, test_questions
+    - Mark test status as 'abandoned'
+    """
+    test = db.query(Test).filter(
+        Test.id == test_id,
+        Test.user_id == user_id,
+    ).first()
+    if not test:
+        raise HTTPException(404, "Test not found")
+
+    if test.status != "in_progress":
+        raise HTTPException(400, f"Test is already {test.status}")
+
+    attempt = db.query(Attempt).filter(Attempt.test_id == test_id).first()
+
+    if attempt:
+        db.query(Answer).filter(Answer.attempt_id == attempt.id).delete()
+        db.query(QuestionTiming).filter(
+            QuestionTiming.attempt_id == attempt.id
+        ).delete()
+        db.delete(attempt)
+
+    db.query(TestQuestion).filter(
+        TestQuestion.test_id == test_id
+    ).delete()
+
+    test.status = "abandoned"
+    test.submitted_at = datetime.now(timezone.utc)
+
+    db.commit()
+
+    clear_user_cache(user_id)
+
+    return {"test_id": test_id, "status": "abandoned"}
