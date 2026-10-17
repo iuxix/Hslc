@@ -27,11 +27,6 @@ def _select_questions(
     difficulty: str,
     count: int,
 ) -> List[Question]:
-    """
-    ✅ OPTIMIZED:
-    - joinedload(Question.options)  → 1 query with JOIN
-    - func.random().limit(count)    → SQL-level random
-    """
     query = (
         db.query(Question)
         .options(joinedload(Question.options))
@@ -62,11 +57,6 @@ def _select_questions(
 
 
 def start_exam(db: Session, user_id: int, payload: ExamStartRequest) -> dict:
-    """
-    ✅ OPTIMIZED:
-    - Bulk INSERT with RETURNING  → 1 round trip instead of 2
-    - joinedload options           → 1 query
-    """
     questions = _select_questions(
         db=db,
         exam_type=payload.exam_type,
@@ -100,11 +90,10 @@ def start_exam(db: Session, user_id: int, payload: ExamStartRequest) -> dict:
         expires_at=expires,
     )
     db.add(test)
-    db.flush()   # Test ID milega
+    db.flush()
 
     shuffled_questions = _shuffle(questions)
 
-    # Prepare bulk insert rows + question map
     tq_rows = []
     question_order_map = []
 
@@ -126,7 +115,6 @@ def start_exam(db: Session, user_id: int, payload: ExamStartRequest) -> dict:
         })
         question_order_map.append((q, options, shuffled_labels))
 
-    # ✅ BULK INSERT with RETURNING — IDs seedha mil jayengi
     if tq_rows:
         result = db.execute(
             insert(TestQuestion).returning(
@@ -145,7 +133,6 @@ def start_exam(db: Session, user_id: int, payload: ExamStartRequest) -> dict:
 
     from app.schemas.exam import ExamQuestionView, ExamOptionView
 
-    # Build map: question_id → (q, options, shuffled_labels)
     q_map = {q.id: (q, options, labels) for q, options, labels in question_order_map}
 
     response_questions = []
@@ -174,7 +161,6 @@ def start_exam(db: Session, user_id: int, payload: ExamStartRequest) -> dict:
             options=shuffled_options,
         ))
 
-    # Sort by display_order (RETURNING order guaranteed nahi)
     response_questions.sort(key=lambda x: x.display_order)
 
     return {
@@ -331,17 +317,25 @@ def submit_exam(db: Session, user_id: int, test_id: int, auto: bool = False) -> 
         db.add(attempt)
         db.flush()
 
-    test_questions = db.query(TestQuestion).filter(
-        TestQuestion.test_id == test_id
-    ).all()
+    # ✅ OPTIMIZED: Load all in 2 queries (no N+1)
+    test_questions = (
+        db.query(TestQuestion)
+        .options(joinedload(TestQuestion.question))
+        .filter(TestQuestion.test_id == test_id)
+        .all()
+    )
+    
+    answers_map = {}
+    for ans in db.query(Answer).filter(Answer.attempt_id == attempt.id).all():
+        answers_map[ans.test_question_id] = ans
 
     correct = 0
     wrong = 0
     unanswered = 0
 
     for tq in test_questions:
-        question = db.query(Question).filter(Question.id == tq.question_id).first()
-        answer = db.query(Answer).filter(Answer.test_question_id == tq.id).first()
+        question = tq.question
+        answer = answers_map.get(tq.id)
 
         if not answer or not answer.selected_option:
             unanswered += 1
@@ -413,10 +407,12 @@ def get_result(db: Session, user_id: int, test_id: int) -> dict:
     if not attempt:
         raise HTTPException(404, "No attempt found")
 
-    from sqlalchemy.orm import joinedload
+    # ✅ OPTIMIZED: Eager load options with question in a single go
     test_questions = (
         db.query(TestQuestion)
-        .options(joinedload(TestQuestion.question))
+        .options(
+            joinedload(TestQuestion.question).selectinload(Question.options)
+        )
         .filter(TestQuestion.test_id == test_id)
         .order_by(TestQuestion.display_order)
         .all()
@@ -426,20 +422,14 @@ def get_result(db: Session, user_id: int, test_id: int) -> dict:
     for ans in db.query(Answer).filter(Answer.attempt_id == attempt.id).all():
         answers_map[ans.test_question_id] = ans
 
-    question_ids = [tq.question_id for tq in test_questions]
-    all_options = db.query(QuestionOption).filter(
-        QuestionOption.question_id.in_(question_ids)
-    ).all()
-    options_map = {}
-    for opt in all_options:
-        options_map.setdefault(opt.question_id, []).append(opt)
-
     question_results = []
 
     for tq in test_questions:
         question = tq.question
         answer = answers_map.get(tq.id)
-        options_db = options_map.get(question.id, [])
+        
+        # ✅ Options already loaded via selectinload
+        options_db = question.options 
 
         opt_map = {opt.option_label: opt.option_text for opt in options_db}
         display_labels = ["A", "B", "C", "D"]
@@ -544,17 +534,7 @@ def _get_active_test(db: Session, user_id: int, test_id: int) -> Test:
     return test
 
 
-
-# ============================================================
-# ABANDON TEST (Exit without saving)
-# ============================================================
-
 def abandon_test(db: Session, user_id: int, test_id: int) -> dict:
-    """
-    Abandon an in-progress test.
-    - Delete all answers, timing, test_questions
-    - Mark test status as 'abandoned'
-    """
     test = db.query(Test).filter(
         Test.id == test_id,
         Test.user_id == user_id,
