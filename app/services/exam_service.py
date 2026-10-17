@@ -29,12 +29,12 @@ def _select_questions(
 ) -> List[Question]:
     """
     ✅ OPTIMIZED:
-    - joinedload(Question.options)  → 1 query (JOIN), not 2
+    - joinedload(Question.options)  → 1 query with JOIN
     - func.random().limit(count)    → SQL-level random
     """
     query = (
         db.query(Question)
-        .options(joinedload(Question.options))   # ✅ 1 query with JOIN
+        .options(joinedload(Question.options))
         .filter(
             Question.subject_id == subject_id,
             Question.is_active == True,
@@ -62,6 +62,11 @@ def _select_questions(
 
 
 def start_exam(db: Session, user_id: int, payload: ExamStartRequest) -> dict:
+    """
+    ✅ OPTIMIZED:
+    - Bulk INSERT with RETURNING  → 1 round trip instead of 2
+    - joinedload options           → 1 query
+    """
     questions = _select_questions(
         db=db,
         exam_type=payload.exam_type,
@@ -99,9 +104,9 @@ def start_exam(db: Session, user_id: int, payload: ExamStartRequest) -> dict:
 
     shuffled_questions = _shuffle(questions)
 
-    # ✅ BULK INSERT — 10 INSERTs → 1 INSERT
+    # Prepare bulk insert rows + question map
     tq_rows = []
-    question_order_map = []   # (q, options, shuffled_labels) — response ke liye
+    question_order_map = []
 
     for idx, q in enumerate(shuffled_questions):
         options = q.options
@@ -121,28 +126,37 @@ def start_exam(db: Session, user_id: int, payload: ExamStartRequest) -> dict:
         })
         question_order_map.append((q, options, shuffled_labels))
 
-    # Bulk insert — single round trip
+    # ✅ BULK INSERT with RETURNING — IDs seedha mil jayengi
     if tq_rows:
-        db.execute(insert(TestQuestion), tq_rows)
+        result = db.execute(
+            insert(TestQuestion).returning(
+                TestQuestion.id,
+                TestQuestion.question_id,
+                TestQuestion.display_order,
+                TestQuestion.option_order,
+            ),
+            tq_rows,
+        )
+        inserted_tqs = result.fetchall()
+    else:
+        inserted_tqs = []
 
     db.commit()
 
-    # Ab test_questions ki IDs chahiye — dobara query karo (ek query)
-    test_qs = (
-        db.query(TestQuestion)
-        .filter(TestQuestion.test_id == test.id)
-        .order_by(TestQuestion.display_order)
-        .all()
-    )
-
     from app.schemas.exam import ExamQuestionView, ExamOptionView
 
+    # Build map: question_id → (q, options, shuffled_labels)
+    q_map = {q.id: (q, options, labels) for q, options, labels in question_order_map}
+
     response_questions = []
-    for tq, (q, options, shuffled_labels) in zip(test_qs, question_order_map):
+    for row in inserted_tqs:
+        tq_id, q_id, display_order, option_order = row
+        q, options, _ = q_map[q_id]
+
         opt_map = {opt.option_label: opt.option_text for opt in options}
         display_labels = ["A", "B", "C", "D"]
         shuffled_options = []
-        for display_label, original_label in zip(display_labels, tq.option_order):
+        for display_label, original_label in zip(display_labels, option_order):
             shuffled_options.append(ExamOptionView(
                 option_label=display_label,
                 option_text=opt_map[original_label],
@@ -150,15 +164,18 @@ def start_exam(db: Session, user_id: int, payload: ExamStartRequest) -> dict:
             ))
 
         response_questions.append(ExamQuestionView(
-            test_question_id=tq.id,
-            question_id=q.id,
-            display_order=tq.display_order,
+            test_question_id=tq_id,
+            question_id=q_id,
+            display_order=display_order,
             question_text=q.question_text,
             difficulty=q.difficulty,
             chapter_id=q.chapter_id,
             topic_id=None,
             options=shuffled_options,
         ))
+
+    # Sort by display_order (RETURNING order guaranteed nahi)
+    response_questions.sort(key=lambda x: x.display_order)
 
     return {
         "test_id": test.id,
